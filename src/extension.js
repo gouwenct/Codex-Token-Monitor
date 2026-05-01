@@ -223,7 +223,7 @@ class CodexTokenMonitor {
     const cachePercent = percentOf(cached, input);
     const cost = numberOrZero(this.latestUsage.cost);
 
-    this.status.text = `$(pulse) ${time}  $(zap)+${formatCount(total)}(in ${formatCount(input)}, cache ${formatCount(cached)}, $(check)${formatPercent(cachePercent)})  $(credit-card)${formatMoney(cost)}`;
+    this.status.text = `$(pulse) ${time} +${formatCount(total)}(in ${formatCount(input)}, cache ${formatCount(cached)}${formatPercent(cachePercent)})  ${formatMoney(cost)}`;
     this.status.tooltip = this.buildTooltip();
   }
 
@@ -246,7 +246,7 @@ class CodexTokenMonitor {
     markdown.appendMarkdown(`| Input | ${formatCount(input)} · Cache hit **${formatCount(cached)} / ${formatPercent(percentOf(cached, input))}** |\n`);
     markdown.appendMarkdown(`| Output | ${formatCount(numberOrZero(usage.output_tokens))} · Reasoning ${formatCount(numberOrZero(usage.reasoning_output_tokens))} |\n\n`);
     markdown.appendMarkdown(`**Session cost:** ${formatMoney(this.latestUsage.cost)}\n\n`);
-    markdown.appendMarkdown("```text\n" + buildCostCalculation(this.latestUsage.modelBreakdown) + "\n```\n");
+    // markdown.appendMarkdown("```text\n" + buildCostCalculation(this.latestUsage.modelBreakdown) + "\n```\n");
     if (this.lastError) {
       markdown.appendMarkdown(`\nLast watcher error: ${escapeMarkdown(this.lastError)}\n`);
     }
