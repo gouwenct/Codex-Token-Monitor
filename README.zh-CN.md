@@ -4,6 +4,14 @@
 
 Codex Token Monitor 是一个用于实时监控、费用估算和可视化 Codex token 使用情况的 VS Code 扩展。
 
+## 项目目的
+
+这个项目的目标，**是让 Codex 使用过程中的 token 消耗变得实时可见**。AI 使用中有一个很容易被误解的原则：**并不是给模型喂得越多，模型就一定越聪明**。很多时候反而是反直觉的——**上下文太多会引入噪声，导致准确率下降，同时还会显著增加 token 消耗**。
+
+因此，我希望能够实时了解每段对话的 token 用量、输入 token、缓存命中率和费用估算。这样可以帮助我更有意识地组织问题，在提高回答准确度的同时，减少本就不多的额度消耗。
+
+单纯依赖 Codex 官方显示的额度百分比，对这个目标来说还不够细。[ccusage](https://github.com/ryoppippi/ccusage) 项目给了我启发：原来可以通过读取本地 Codex JSONL session 文件，直接拿到 token 消耗量。但 ccusage 不能在 VS Code 中实时检测每一条 token 事件的用量，所以我开发了这个插件。希望通过 token 的实时反馈，提高提问效率，让每一次上下文输入都更克制、更有效。
+
 Codex Token Monitor 会监视你的 Codex JSONL 会话文件，读取 `event_msg` 中 `payload type` 为 `token_count` 的事件，并把最新 token 用量直接显示在 VS Code 状态栏中。
 
 ```text
@@ -14,7 +22,7 @@ Codex Token Monitor 会监视你的 Codex JSONL 会话文件，读取 `event_msg
 
 点击状态栏中的 token usage 项目，可以打开更详细的可视化仪表盘。
 
-![Codex Token Usage Dashboard](docs/dashboard.png)
+![Codex Token Usage Dashboard](docs/dashboard.gif)
 
 ## 功能
 

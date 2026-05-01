@@ -4,6 +4,14 @@ Language: [CN](./README.zh-CN.md)
 
 A VS Code extension for real-time monitoring, pricing, and visualization of Codex token usage.
 
+## Why this project exists
+
+The goal of this project is to make token usage visible while working with Codex. A common misconception is that giving an AI model more context always makes it smarter. In practice, the opposite can happen: too much context may reduce accuracy, increase noise, and consume far more tokens.
+
+I wanted a way to understand the token cost of each conversation turn in real time, including total usage and cache hit rate, so I could ask more efficient questions, improve answer quality, and reduce unnecessary consumption of my limited quota.
+
+Codex's official quota percentage is useful, but it is not detailed enough for this workflow. The ccusage project showed that Codex token usage can be read directly from local JSONL session files. However, ccusage is not designed to monitor every token event in real time inside VS Code. This extension was built to fill that gap: it provides immediate feedback on token usage so each prompt can become more intentional, efficient, and cost-aware.
+
 Codex Token Monitor watches your Codex JSONL session files, reads `event_msg` entries whose payload type is `token_count`, and displays the latest token usage directly in the VS Code status bar.
 
 ```text
@@ -14,7 +22,7 @@ The status bar shows the latest session turn, including total tokens, input toke
 
 Click the status bar token usage item to open the detailed visual dashboard.
 
-![Codex Token Usage Dashboard](docs/dashboard.png)
+![Codex Token Usage Dashboard](docs/dashboard.gif)
 
 ## Features
 

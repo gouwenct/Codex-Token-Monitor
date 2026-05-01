@@ -1,6 +1,6 @@
 {
-  "name": "codex-token-monitor",
-  "displayName": "Codex Token Monitor",
+  "name": "codex-token-monitor2",
+  "displayName": "Codex Token Monitor2",
   "description": "Realtime Codex token usage and cost monitor for the VS Code status bar.",
   "version": "0.3.0",
   "publisher": "gouwengone",
