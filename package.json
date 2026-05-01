@@ -1,10 +1,18 @@
 {
   "name": "codex-token-monitor",
   "displayName": "Codex Token Monitor",
-  "description": "Realtime Codex token usage monitor for the VS Code status bar.",
-  "version": "0.2.3",
-  "publisher": "local",
+  "description": "Realtime Codex token usage and cost monitor for the VS Code status bar.",
+  "version": "0.3.0",
+  "publisher": "gouwengone",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gouwengone/codex-token-monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gouwengone/codex-token-monitor/issues"
+  },
+  "homepage": "https://github.com/gouwengone/codex-token-monitor#readme",
   "engines": {
     "vscode": "^1.85.0"
   },

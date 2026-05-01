@@ -9,6 +9,15 @@ const vscode = require("vscode");
 const EXTENSION_ID = "codexTokenMonitor";
 const TOKEN_EVENT = '"type":"token_count"';
 const DAY_MS = 24 * 60 * 60 * 1000;
+const FAST_MODE_MULTIPLIER = 2.5;
+const PRICE_TABLE = {
+  "gpt-5.5": { input: 5, cached: 0.5, output: 30 },
+  "gpt-5-codex": { input: 1.25, cached: 0.125, output: 10 },
+  "gpt-5.1-codex": { input: 1.25, cached: 0.125, output: 10 },
+  "gpt-5.1-codex-max": { input: 1.25, cached: 0.125, output: 10 },
+  "gpt-5.2-codex": { input: 1.75, cached: 0.175, output: 14 },
+  "gpt-5.3-codex": { input: 1.75, cached: 0.175, output: 14 }
+};
 
 let monitor;
 
@@ -206,42 +215,43 @@ class CodexTokenMonitor {
       return;
     }
 
-    const usage = this.latestUsage.delta;
-    const time = formatLocalTime(this.latestUsage.timestamp);
+    const usage = sessionGroupToUsage(this.latestUsage);
+    const time = formatLocalTime(this.latestUsage.lastAt || this.latestUsage.timestamp);
     const input = numberOrZero(usage.input_tokens);
-    const output = numberOrZero(usage.output_tokens);
+    const cached = numberOrZero(usage.cached_input_tokens);
     const total = numberOrZero(usage.total_tokens);
+    const cachePercent = percentOf(cached, input);
+    const cost = numberOrZero(this.latestUsage.cost);
 
-    this.status.text = `$(pulse) ${time}  +${formatCount(total)} (in:${formatCount(input)} / out:${formatCount(output)})  today:${formatCount(this.todayTotal)}`;
+    this.status.text = `$(pulse) ${time}  $(zap)+${formatCount(total)}(in ${formatCount(input)}, cache ${formatCount(cached)}, $(check)${formatPercent(cachePercent)})  $(credit-card)${formatMoney(cost)}`;
     this.status.tooltip = this.buildTooltip();
   }
 
   buildTooltip() {
-    const usage = this.latestUsage.delta;
+    const usage = sessionGroupToUsage(this.latestUsage);
     const account = this.latestUsage.accountLabel || "Account";
-    const lines = [
-      "Codex Token Monitor",
-      "Accounting: ccusage-compatible cumulative deltas",
-      `Account: ${account}`,
-      `Latest session: ${this.latestSession.fullPath}`,
-      `Last event: ${formatDateTime(this.latestUsage.timestamp)}`,
-      `Last tokens: ${formatCount(numberOrZero(usage.total_tokens))}`,
-      `Input: ${formatCount(numberOrZero(usage.input_tokens))}`,
-      `Cached input: ${formatCount(numberOrZero(usage.cached_input_tokens))}`,
-      `Output: ${formatCount(numberOrZero(usage.output_tokens))}`,
-      `Reasoning output: ${formatCount(numberOrZero(usage.reasoning_output_tokens))}`,
-      `Today total: ${formatCount(this.todayTotal)}`
-    ];
-
-    if (this.latestUsage.contextWindow) {
-      lines.push(`Context window: ${formatCount(this.latestUsage.contextWindow)}`);
-    }
+    const cached = numberOrZero(usage.cached_input_tokens);
+    const input = numberOrZero(usage.input_tokens);
+    const modelSummary = summarizeModelBreakdown(this.latestUsage.modelBreakdown);
+    const markdown = new vscode.MarkdownString(undefined, true);
+    markdown.isTrusted = true;
+    markdown.supportThemeIcons = true;
+    markdown.appendMarkdown("### Codex Token Monitor\n\n");
+    markdown.appendMarkdown("| Field | Value |\n|---|---|\n");
+    markdown.appendMarkdown(`| Account | ${escapeMarkdown(account)} |\n`);
+    markdown.appendMarkdown(`| Latest session | ${escapeMarkdown(this.latestSession.fullPath)} |\n`);
+    markdown.appendMarkdown(`| Last update | ${escapeMarkdown(formatDateTime(this.latestUsage.lastAt || this.latestUsage.timestamp))} |\n\n`);
+    markdown.appendMarkdown("| Usage | Detail |\n|---|---|\n");
+    markdown.appendMarkdown(`| Session total | **${formatCount(numberOrZero(usage.total_tokens))}** · ${escapeMarkdown(modelSummary)} |\n`);
+    markdown.appendMarkdown(`| Input | ${formatCount(input)} · Cache hit **${formatCount(cached)} / ${formatPercent(percentOf(cached, input))}** |\n`);
+    markdown.appendMarkdown(`| Output | ${formatCount(numberOrZero(usage.output_tokens))} · Reasoning ${formatCount(numberOrZero(usage.reasoning_output_tokens))} |\n\n`);
+    markdown.appendMarkdown(`**Session cost:** ${formatMoney(this.latestUsage.cost)}\n\n`);
+    markdown.appendMarkdown("```text\n" + buildCostCalculation(this.latestUsage.modelBreakdown) + "\n```\n");
     if (this.lastError) {
-      lines.push(`Last watcher error: ${this.lastError}`);
+      markdown.appendMarkdown(`\nLast watcher error: ${escapeMarkdown(this.lastError)}\n`);
     }
-
-    lines.push("Click to open dashboard.");
-    return lines.join("\n");
+    markdown.appendMarkdown("\nClick to open dashboard.");
+    return markdown;
   }
 
   async openLatestSession() {
@@ -406,6 +416,11 @@ async function buildAccountUsage(account, ranges) {
           output: event.delta.output_tokens,
           cached: event.delta.cached_input_tokens,
           reasoning: event.delta.reasoning_output_tokens,
+          cost: event.delta.cost_usd,
+          costCalculation: event.costCalculation,
+          model: event.model,
+          reasoningEffort: event.reasoningEffort,
+          serviceTier: event.serviceTier,
           session: path.basename(file.fullPath),
           snippet: event.snippet
         });
@@ -416,6 +431,7 @@ async function buildAccountUsage(account, ranges) {
           ...event,
           accountId: account.id,
           accountLabel: account.label,
+          sessionId: groupId,
           session: { fullPath: file.fullPath }
         };
       }
@@ -424,6 +440,7 @@ async function buildAccountUsage(account, ranges) {
 
   todayPoints.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   const sessions = Array.from(sessionMap.values()).sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+  const latestSessionGroup = sessions[0];
   for (const group of todaySessionMap.values()) {
     if (group.eventCount > 0) {
       todaySessionGroups.push(group);
@@ -447,6 +464,7 @@ async function buildAccountUsage(account, ranges) {
     sevenDays: buildDaySeries(ranges.sevenStart, 7, dailyMap),
     monthDays: buildDaySeries(ranges.monthStart, 30, dailyMap),
     recentSessions: sessions.slice(0, 20),
+    latestSessionGroup,
     latestDelta
   };
 }
@@ -501,8 +519,11 @@ function getSessionGroup(map, id, account, file, event) {
       total: 0,
       cached: 0,
       reasoning: 0,
+      cost: 0,
       eventCount: 0,
       eventIds: [],
+      modelUsage: {},
+      modelBreakdown: [],
       snippet: event.snippet
     });
   }
@@ -516,8 +537,11 @@ function addEventToSessionGroup(group, event) {
   group.total += event.delta.total_tokens;
   group.cached += event.delta.cached_input_tokens;
   group.reasoning += event.delta.reasoning_output_tokens;
+  group.cost += event.delta.cost_usd;
   group.eventCount += 1;
   group.eventIds.push(event.index);
+  addModelUsage(group.modelUsage, event);
+  group.modelBreakdown = modelUsageToBreakdown(group.modelUsage);
   if (event.snippet && event.snippet !== "(no prompt)") {
     group.snippet = event.snippet;
   }
@@ -530,6 +554,9 @@ async function readSessionStats(file, minTimestamp) {
   let lastTimestamp = undefined;
   let latestEvent = undefined;
   let currentSnippet = "";
+  let currentModel = "unknown";
+  let currentReasoningEffort = "unknown";
+  let currentServiceTier = "standard";
   let eventIndex = 0;
   let groupIndex = 0;
   const events = [];
@@ -550,6 +577,17 @@ async function readSessionStats(file, minTimestamp) {
         groupIndex += 1;
       }
 
+      const context = parseRunContext(line);
+      if (context.model) {
+        currentModel = context.model;
+      }
+      if (context.reasoningEffort) {
+        currentReasoningEffort = context.reasoningEffort;
+      }
+      if (context.serviceTier) {
+        currentServiceTier = context.serviceTier;
+      }
+
       const event = parseTokenEvent(line);
       if (!event || !event.total) {
         continue;
@@ -557,6 +595,11 @@ async function readSessionStats(file, minTimestamp) {
 
       const current = normalizeUsage(event.total);
       const delta = subtractUsage(current, previous);
+      const model = event.model || currentModel;
+      const reasoningEffort = event.reasoningEffort || currentReasoningEffort;
+      const serviceTier = event.serviceTier || currentServiceTier;
+      const cost = calculateUsageCost(delta, model, serviceTier);
+      delta.cost_usd = cost.total;
       previous = current;
 
       if (!hasUsage(delta)) {
@@ -576,6 +619,11 @@ async function readSessionStats(file, minTimestamp) {
         delta,
         cumulative: current,
         contextWindow: event.contextWindow,
+        model,
+        reasoningEffort,
+        serviceTier,
+        cost: cost.total,
+        costCalculation: cost.calculation,
         snippet: truncateSnippet(currentSnippet, 20)
       };
       latestEvent = item;
@@ -625,11 +673,68 @@ function parseTokenEvent(line) {
     return {
       timestamp: json.timestamp,
       total,
-      contextWindow: info.model_context_window
+      contextWindow: info.model_context_window,
+      model: normalizeModelName(findFirstValue(info, ["model", "model_id", "modelId"])),
+      reasoningEffort: normalizeLabel(findFirstValue(info, ["reasoning_effort", "reasoningEffort", "effort"])),
+      serviceTier: normalizeServiceTier(findFirstValue(info, ["service_tier", "serviceTier", "mode", "tier"]))
     };
   } catch {
     return undefined;
   }
+}
+
+function parseRunContext(line) {
+  if (!line || (!line.includes("model") && !line.includes("reasoning") && !line.includes("service") && !line.includes("tier"))) {
+    return {};
+  }
+
+  try {
+    const json = JSON.parse(line);
+    return {
+      model: normalizeModelName(findFirstValue(json, ["model", "model_id", "modelId"])),
+      reasoningEffort: normalizeLabel(findFirstValue(json, ["reasoning_effort", "reasoningEffort", "effort"])),
+      serviceTier: normalizeServiceTier(findFirstValue(json, ["service_tier", "serviceTier", "mode", "tier"]))
+    };
+  } catch {
+    return {};
+  }
+}
+
+function findFirstValue(value, keys) {
+  const seen = new Set();
+
+  function visit(node) {
+    if (!node || typeof node !== "object" || seen.has(node)) {
+      return undefined;
+    }
+    seen.add(node);
+
+    for (const key of keys) {
+      if (typeof node[key] === "string" || typeof node[key] === "number") {
+        return node[key];
+      }
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const result = visit(item);
+        if (result !== undefined) {
+          return result;
+        }
+      }
+      return undefined;
+    }
+
+    for (const item of Object.values(node)) {
+      const result = visit(item);
+      if (result !== undefined) {
+        return result;
+      }
+    }
+    return undefined;
+  }
+
+  return visit(value);
 }
 
 function parseConversationSnippet(line) {
@@ -767,7 +872,8 @@ function summarizeAccounts(accounts, todayStart, sevenStart, monthStart) {
         input_tokens: day.input,
         output_tokens: day.output,
         cached_input_tokens: day.cached,
-        reasoning_output_tokens: day.reasoning
+        reasoning_output_tokens: day.reasoning,
+        cost_usd: day.cost
       });
     }
   }
@@ -789,11 +895,16 @@ function summarizeAccounts(accounts, todayStart, sevenStart, monthStart) {
 function findLatestAccountUsage(accounts) {
   let latest = undefined;
   for (const account of accounts) {
-    if (!account.latestDelta) {
+    if (!account.latestSessionGroup) {
       continue;
     }
-    const candidate = account.latestDelta;
-    if (!latest || new Date(candidate.timestamp).getTime() > new Date(latest.usage.timestamp).getTime()) {
+    const candidate = {
+      ...account.latestSessionGroup,
+      accountId: account.id,
+      accountLabel: account.label,
+      session: { fullPath: account.latestSessionGroup.file }
+    };
+    if (!latest || new Date(candidate.lastAt).getTime() > new Date(latest.usage.lastAt).getTime()) {
       latest = {
         session: candidate.session,
         usage: candidate
@@ -815,7 +926,8 @@ function buildDaySeries(startMs, count, dailyMap) {
       input: usage.input_tokens,
       output: usage.output_tokens,
       cached: usage.cached_input_tokens,
-      reasoning: usage.reasoning_output_tokens
+      reasoning: usage.reasoning_output_tokens,
+      cost: usage.cost_usd
     };
   });
 }
@@ -860,7 +972,8 @@ function emptyUsage() {
     cached_input_tokens: 0,
     output_tokens: 0,
     reasoning_output_tokens: 0,
-    total_tokens: 0
+    total_tokens: 0,
+    cost_usd: 0
   };
 }
 
@@ -896,7 +1009,8 @@ function addUsage(left, right) {
     cached_input_tokens: left.cached_input_tokens + right.cached_input_tokens,
     output_tokens: left.output_tokens + right.output_tokens,
     reasoning_output_tokens: left.reasoning_output_tokens + right.reasoning_output_tokens,
-    total_tokens: left.total_tokens + right.total_tokens
+    total_tokens: left.total_tokens + right.total_tokens,
+    cost_usd: numberOrZero(left.cost_usd) + numberOrZero(right.cost_usd)
   };
 }
 
@@ -910,6 +1024,170 @@ function hasUsage(usage) {
     numberOrZero(usage.output_tokens) > 0 ||
     numberOrZero(usage.cached_input_tokens) > 0 ||
     numberOrZero(usage.reasoning_output_tokens) > 0;
+}
+
+function sessionGroupToUsage(group) {
+  return {
+    input_tokens: numberOrZero(group && group.input),
+    cached_input_tokens: numberOrZero(group && group.cached),
+    output_tokens: numberOrZero(group && group.output),
+    reasoning_output_tokens: numberOrZero(group && group.reasoning),
+    total_tokens: numberOrZero(group && group.total),
+    cost_usd: numberOrZero(group && group.cost)
+  };
+}
+
+function addModelUsage(modelUsage, event) {
+  const model = normalizeModelName(event.model) || "unknown";
+  const reasoningEffort = normalizeLabel(event.reasoningEffort) || "unknown";
+  const serviceTier = normalizeServiceTier(event.serviceTier) || "standard";
+  const key = `${model}|${reasoningEffort}|${serviceTier}`;
+  if (!modelUsage[key]) {
+    modelUsage[key] = {
+      model,
+      reasoningEffort,
+      serviceTier,
+      input: 0,
+      cached: 0,
+      output: 0,
+      reasoning: 0,
+      total: 0,
+      cost: 0,
+      calculations: []
+    };
+  }
+  const item = modelUsage[key];
+  item.input += event.delta.input_tokens;
+  item.cached += event.delta.cached_input_tokens;
+  item.output += event.delta.output_tokens;
+  item.reasoning += event.delta.reasoning_output_tokens;
+  item.total += event.delta.total_tokens;
+  item.cost += event.delta.cost_usd;
+  if (event.costCalculation && !item.calculations.includes(event.costCalculation)) {
+    item.calculations.push(event.costCalculation);
+  }
+}
+
+function modelUsageToBreakdown(modelUsage) {
+  return Object.values(modelUsage || {})
+    .sort((a, b) => b.cost - a.cost)
+    .map((item) => ({
+      ...item,
+      cachePercent: percentOf(item.cached, item.input),
+      calculation: item.calculations.join("\n")
+    }));
+}
+
+function calculateUsageCost(usage, model, serviceTier) {
+  const modelKey = priceModelKey(model);
+  const pricing = modelKey ? PRICE_TABLE[modelKey] : undefined;
+  if (!pricing) {
+    return {
+      total: 0,
+      calculation: `${model || "unknown"}: price unavailable`
+    };
+  }
+
+  const input = numberOrZero(usage.input_tokens);
+  const cached = numberOrZero(usage.cached_input_tokens);
+  const uncached = Math.max(input - cached, 0);
+  const output = numberOrZero(usage.output_tokens);
+  const multiplier = isFastMode(serviceTier) ? FAST_MODE_MULTIPLIER : 1;
+  const inputCost = uncached * pricing.input / 1000000 * multiplier;
+  const cachedCost = cached * pricing.cached / 1000000 * multiplier;
+  const outputCost = output * pricing.output / 1000000 * multiplier;
+  const total = inputCost + cachedCost + outputCost;
+  const mode = normalizeServiceTier(serviceTier) || "standard";
+  const suffix = multiplier === 1 ? "" : ` x ${multiplier}`;
+
+  return {
+    total,
+    calculation: `${modelKey} / ${mode}: uncached ${formatCount(uncached)} * $${pricing.input}/1M${suffix} = ${formatMoney(inputCost)}; cached ${formatCount(cached)} * $${pricing.cached}/1M${suffix} = ${formatMoney(cachedCost)}; output ${formatCount(output)} * $${pricing.output}/1M${suffix} = ${formatMoney(outputCost)}; total ${formatMoney(total)}`
+  };
+}
+
+function priceModelKey(model) {
+  const normalized = normalizeModelName(model);
+  if (!normalized) {
+    return undefined;
+  }
+  const direct = PRICE_TABLE[normalized] ? normalized : undefined;
+  if (direct) {
+    return direct;
+  }
+  return Object.keys(PRICE_TABLE).find((key) => normalized.startsWith(key));
+}
+
+function normalizeModelName(value) {
+  const normalized = normalizeLabel(value);
+  return normalized && normalized !== "unknown" ? normalized : undefined;
+}
+
+function normalizeLabel(value) {
+  const label = String(value || "").trim().toLowerCase();
+  return label || undefined;
+}
+
+function normalizeServiceTier(value) {
+  const tier = normalizeLabel(value);
+  if (!tier) {
+    return undefined;
+  }
+  if (tier.includes("fast")) {
+    return "fast";
+  }
+  if (tier.includes("standard")) {
+    return "standard";
+  }
+  return tier;
+}
+
+function isFastMode(value) {
+  return normalizeServiceTier(value) === "fast";
+}
+
+function percentOf(part, whole) {
+  const denominator = numberOrZero(whole);
+  return denominator > 0 ? (numberOrZero(part) / denominator) * 100 : 0;
+}
+
+function formatPercent(value) {
+  return `${trimFixed(numberOrZero(value))}%`;
+}
+
+function formatMoney(value) {
+  const amount = numberOrZero(value);
+  if (amount === 0) {
+    return "$0.00";
+  }
+  if (amount < 0.01) {
+    return `$${amount.toFixed(4)}`;
+  }
+  return `$${amount.toFixed(2)}`;
+}
+
+function summarizeModelBreakdown(breakdown) {
+  const models = Array.isArray(breakdown) ? breakdown : [];
+  if (models.length === 0) {
+    return "unknown model";
+  }
+  if (models.length === 1) {
+    const item = models[0];
+    return `${item.model} / ${item.reasoningEffort || "unknown"} / ${item.serviceTier || "standard"}`;
+  }
+  return `${models.length} models`;
+}
+
+function buildCostCalculation(breakdown) {
+  const models = Array.isArray(breakdown) ? breakdown : [];
+  if (models.length === 0) {
+    return "No priced model data for this session.";
+  }
+  return models.map((item) => item.calculation || `${item.model}: price unavailable`).join("\n");
+}
+
+function escapeMarkdown(value) {
+  return String(value == null ? "" : value).replace(/[\\|*_`[\]]/g, "\\$&");
 }
 
 function startOfLocalDay(date) {
@@ -1013,7 +1291,7 @@ function getDashboardHtml() {
     }
     button { cursor: pointer; background: var(--vscode-button-secondaryBackground); }
     button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
-    .summary { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 10px; margin: 12px 0 16px; }
+    .summary { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)); gap: 10px; margin: 12px 0 16px; }
     .metric, .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -1026,6 +1304,7 @@ function getDashboardHtml() {
     .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); gap: 12px; }
     .panel { padding: 14px; min-width: 0; }
     .panel h2 { margin: 0 0 10px; font-size: 14px; font-weight: 650; }
+    .model-panel { margin-bottom: 12px; }
     .chart { height: 220px; width: 100%; border-top: 1px solid var(--line); padding-top: 10px; }
     .chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
     .axis { stroke: var(--line); stroke-width: 1; }
@@ -1065,8 +1344,10 @@ function getDashboardHtml() {
     tbody td:first-child { border-radius: 4px 0 0 4px; }
     tbody td:last-child { border-radius: 0 4px 4px 0; }
     td.dialog { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+    .money { color: var(--accent2); font-weight: 650; }
     #eventsTable, #sessionsTable { max-height: 520px; overflow: auto; }
     .empty { color: var(--muted); padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 6px; }
+    .empty.compact { padding: 10px; }
     .stack { display: grid; gap: 12px; }
     @media (max-width: 840px) {
       header { display: block; }
@@ -1090,6 +1371,10 @@ function getDashboardHtml() {
         <button id="folderButton" title="Choose sessions folder">Folder</button>
       </div>
     </header>
+    <section class="panel model-panel">
+      <h2>Models Used This Session</h2>
+      <div id="modelTable"></div>
+    </section>
     <section class="summary" id="summary"></section>
     <section class="grid">
       <div class="stack">
@@ -1170,6 +1455,7 @@ function getDashboardHtml() {
           todaySessionGroups: state.data.totals.todaySessionGroups,
           sevenDays: state.data.totals.sevenDays,
           monthDays: state.data.totals.monthDays,
+          latestSessionGroup: state.data.accounts.flatMap((account) => account.latestSessionGroup ? [{ ...account.latestSessionGroup, account: account.label }] : []).sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt))[0],
           recentSessions: state.data.accounts.flatMap((account) => account.recentSessions.map((session) => ({ ...session, account: account.label }))).sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt)).slice(0, 20)
         };
       }
@@ -1180,6 +1466,7 @@ function getDashboardHtml() {
       const data = activeData();
       if (!data) return;
       document.getElementById("subtitle").textContent = data.root || "No sessions folder";
+      renderModelTable(data.latestSessionGroup);
       renderSummary(data);
       renderTimeline("todayChart", data.todayPoints || [], data.todaySessionGroups || []);
       renderBars("weekChart", data.sevenDays || [], true);
@@ -1193,15 +1480,28 @@ function getDashboardHtml() {
       const seven = data.totals.seven || {};
       const month = data.totals.month || {};
       document.getElementById("summary").innerHTML = [
-        metric("Today", today.total_tokens, "input " + fmt(today.input_tokens) + " / output " + fmt(today.output_tokens)),
-        metric("7 Days", seven.total_tokens, "cached " + fmt(seven.cached_input_tokens)),
-        metric("30 Days", month.total_tokens, "reasoning " + fmt(month.reasoning_output_tokens)),
+        metric("Today", today.total_tokens, money(today.cost_usd) + " · input " + fmt(today.input_tokens) + " / output " + fmt(today.output_tokens)),
+        metric("Cache", today.cached_input_tokens, fmt(today.cached_input_tokens) + " / " + pct(today.cached_input_tokens, today.input_tokens)),
+        metric("7 Days", seven.total_tokens, money(seven.cost_usd) + " · cached " + fmt(seven.cached_input_tokens)),
+        metric("30 Days", month.total_tokens, money(month.cost_usd) + " · reasoning " + fmt(month.reasoning_output_tokens)),
         metric("Sessions", data.sessions, data.files + " files scanned")
       ].join("");
     }
 
     function metric(label, value, detail) {
       return '<div class="metric"><div class="label">' + escapeHtml(label) + '</div><div class="value">' + fmt(value) + '</div><div class="detail">' + escapeHtml(detail) + '</div></div>';
+    }
+
+    function renderModelTable(session) {
+      const host = document.getElementById("modelTable");
+      const models = session && Array.isArray(session.modelBreakdown) ? session.modelBreakdown : [];
+      if (!models.length) {
+        host.innerHTML = '<div class="empty compact">No priced model data for the latest session.</div>';
+        return;
+      }
+      host.innerHTML = '<table><thead><tr><th>Model</th><th>Reasoning</th><th>Mode</th><th>Input</th><th>Cache</th><th>Output</th><th>Total</th><th>Cost</th></tr></thead><tbody>' +
+        models.map((item) => '<tr title="' + escapeHtml(item.calculation || "") + '"><td>' + escapeHtml(item.model) + '</td><td>' + escapeHtml(item.reasoningEffort || "unknown") + '</td><td>' + escapeHtml(item.serviceTier || "standard") + '</td><td>' + fmt(item.input) + '</td><td>' + fmt(item.cached) + ' / ' + pct(item.cached, item.input) + '</td><td>' + fmt(item.output) + '</td><td>' + fmt(item.total) + '</td><td class="money">' + money(item.cost) + '</td></tr>').join("") +
+        '</tbody></table>';
     }
 
     function renderTimeline(id, points, sessionGroups) {
@@ -1245,7 +1545,7 @@ function getDashboardHtml() {
         '<line class="axis" x1="' + pad + '" y1="' + (height - pad) + '" x2="' + (width - pad) + '" y2="' + (height - pad) + '"></line>' +
         segments +
         sessionRings.map((ring) => '<circle class="session-ring" data-session-id="' + escapeHtml(ring.id) + '" cx="' + ring.x.toFixed(1) + '" cy="' + ring.y.toFixed(1) + '" r="' + ring.r.toFixed(1) + '" stroke="' + ring.color + '"><title>' + escapeHtml(ring.title) + '</title></circle>').join("") +
-        coords.map((item) => '<circle class="point" data-event-id="' + escapeHtml(item.point.id) + '" cx="' + item.x.toFixed(1) + '" cy="' + item.y.toFixed(1) + '" r="' + pointRadius(item.point.total, maxValue) + '" fill="' + tokenColor(item.point.total, maxValue) + '"><title>' + escapeHtml(item.point.time + " +" + fmt(item.point.total) + " " + item.point.snippet) + '</title></circle>').join("") +
+        coords.map((item) => '<circle class="point" data-event-id="' + escapeHtml(item.point.id) + '" cx="' + item.x.toFixed(1) + '" cy="' + item.y.toFixed(1) + '" r="' + pointRadius(item.point.total, maxValue) + '" fill="' + tokenColor(item.point.total, maxValue) + '"><title>' + escapeHtml(item.point.time + " +" + fmt(item.point.total) + " cache " + fmt(item.point.cached) + " / " + pct(item.point.cached, item.point.input) + " " + money(item.point.cost) + " " + item.point.snippet) + '</title></circle>').join("") +
         ticks +
         '<text class="tick" x="' + pad + '" y="14">max ' + fmt(maxValue) + '</text>' +
         '</svg>';
@@ -1310,7 +1610,7 @@ function getDashboardHtml() {
           const yTotal = height - pad - totalHeight;
           const yInput = height - pad - inputHeight;
           const yOutput = yInput - outputHeight;
-          const title = escapeHtml(day.label + " " + fmt(day.total) + " tokens");
+          const title = escapeHtml(day.label + " " + fmt(day.total) + " tokens · " + money(day.cost));
           const attrs = ' data-bar-title="' + title + '"';
           if (stacked) {
             return '<g class="bar-group"' + attrs + '><rect class="bar" x="' + x + '" y="' + yInput + '" width="' + barWidth + '" height="' + Math.max(inputHeight, 1) + '"></rect>' +
@@ -1337,8 +1637,8 @@ function getDashboardHtml() {
         return;
       }
       const max = Math.max(...sessions.map((session) => session.total), 1);
-      host.innerHTML = '<table><thead><tr><th>Time</th><th>Input</th><th>Output</th><th>Total</th><th>Dialog</th></tr></thead><tbody>' +
-        sessions.map((session) => '<tr data-session-row="' + escapeHtml(session.id) + '" style="background:' + rowColor(session.total, max) + '"><td>' + escapeHtml(shortDate(session.lastAt)) + '</td><td>' + fmt(session.input) + '</td><td>' + fmt(session.output) + '</td><td>' + fmt(session.total) + '</td><td class="dialog" title="' + escapeHtml(session.file) + '">' + escapeHtml((session.account ? session.account + " / " : "") + session.snippet) + '</td></tr>').join("") +
+      host.innerHTML = '<table><thead><tr><th>Cost</th><th>Time</th><th>Input</th><th>Cache</th><th>Output</th><th>Total</th><th>Dialog</th></tr></thead><tbody>' +
+        sessions.map((session) => '<tr data-session-row="' + escapeHtml(session.id) + '" style="background:' + rowColor(session.total, max) + '"><td class="money" title="' + escapeHtml(costTitle(session.modelBreakdown)) + '">' + money(session.cost) + '</td><td>' + escapeHtml(shortDate(session.lastAt)) + '</td><td>' + fmt(session.input) + '</td><td>' + fmt(session.cached) + ' / ' + pct(session.cached, session.input) + '</td><td>' + fmt(session.output) + '</td><td>' + fmt(session.total) + '</td><td class="dialog" title="' + escapeHtml(session.file) + '">' + escapeHtml((session.account ? session.account + " / " : "") + session.snippet) + '</td></tr>').join("") +
         '</tbody></table>';
       wireSessionRowHover(host);
     }
@@ -1351,8 +1651,8 @@ function getDashboardHtml() {
         return;
       }
       const max = Math.max(...recent.map((point) => point.total), 1);
-      host.innerHTML = '<table><thead><tr><th>Time</th><th>Input</th><th>Output</th><th>Total</th><th>Dialog</th></tr></thead><tbody>' +
-        recent.map((point) => '<tr data-event-row="' + escapeHtml(point.id) + '" style="background:' + rowColor(point.total, max) + '"><td>' + escapeHtml(point.time) + '</td><td>' + fmt(point.input) + '</td><td>' + fmt(point.output) + '</td><td>' + fmt(point.total) + '</td><td class="dialog" title="' + escapeHtml(point.session) + '">' + escapeHtml(point.snippet) + '</td></tr>').join("") +
+      host.innerHTML = '<table><thead><tr><th>Cost</th><th>Time</th><th>Input</th><th>Cache</th><th>Output</th><th>Total</th><th>Session</th></tr></thead><tbody>' +
+        recent.map((point) => '<tr data-event-row="' + escapeHtml(point.id) + '" style="background:' + rowColor(point.total, max) + '"><td class="money" title="' + escapeHtml(point.costCalculation || "") + '">' + money(point.cost) + '</td><td>' + escapeHtml(point.time) + '</td><td>' + fmt(point.input) + '</td><td>' + fmt(point.cached) + ' / ' + pct(point.cached, point.input) + '</td><td>' + fmt(point.output) + '</td><td>' + fmt(point.total) + '</td><td class="dialog" title="' + escapeHtml(point.session) + '">' + escapeHtml(point.snippet) + '</td></tr>').join("") +
         '</tbody></table>';
       wireEventRowHover(host);
     }
@@ -1544,6 +1844,24 @@ function getDashboardHtml() {
       if (number >= 1000000) return trim(number / 1000000) + "m";
       if (number >= 1000) return trim(number / 1000) + "k";
       return String(number);
+    }
+
+    function pct(part, whole) {
+      const total = Number(whole) || 0;
+      return total > 0 ? trim(((Number(part) || 0) / total) * 100) + "%" : "0%";
+    }
+
+    function money(value) {
+      const amount = Number(value) || 0;
+      if (amount === 0) return "$0.00";
+      if (amount < 0.01) return "$" + amount.toFixed(4);
+      return "$" + amount.toFixed(2);
+    }
+
+    function costTitle(breakdown) {
+      const models = Array.isArray(breakdown) ? breakdown : [];
+      if (!models.length) return "No priced model data.";
+      return models.map((item) => item.calculation || item.model + ": price unavailable").join("\\n");
     }
 
     function trim(value) {

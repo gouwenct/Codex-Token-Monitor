@@ -1,12 +1,16 @@
 # Codex Token Monitor
 
-A VS Code extension for real-time monitoring and visualization of Codex token usage.
+Language: [CN](./README.zh-CN.md)
+
+A VS Code extension for real-time monitoring, pricing, and visualization of Codex token usage.
 
 Codex Token Monitor watches your Codex JSONL session files, reads `event_msg` entries whose payload type is `token_count`, and displays the latest token usage directly in the VS Code status bar.
 
 ```text
-19:32  +320 (in:200 / out:120)  today:12.4k
+18:41  +56k(in 54.6k, cache 50k, 91%)  $0.12
 ```
+
+The status bar shows the latest session turn, including total tokens, input tokens, cached input tokens, cache hit percentage, and estimated session cost.
 
 Click the status bar token usage item to open the detailed visual dashboard.
 
@@ -16,13 +20,15 @@ Click the status bar token usage item to open the detailed visual dashboard.
 
 - Monitors `~/.codex/sessions` by default.
 - Supports nested Codex session folders, such as `sessions/2026/04/30/*.jsonl`.
-- Shows the latest request token delta, input tokens, output tokens, and today's total usage in the VS Code status bar.
+- Shows the latest session turn in the VS Code status bar, including total tokens, input tokens, cached input tokens, cache hit percentage, and estimated cost.
 - Uses ccusage-compatible accounting: each `token_count` event is treated as a cumulative total, and usage is calculated from the positive delta between consecutive cumulative events in the same session file.
 - Avoids double-counting repeated `token_count` events because repeated cumulative totals produce a zero delta.
-- Opens a visual dashboard from the status bar, including today's token timeline, 7-day usage, 30-day usage, recent sessions, and detailed event records.
+- Estimates cost from the actual model IDs found in Codex session logs, with separate rates for uncached input, cached input, output, and fast mode.
+- Opens a visual dashboard from the status bar, including today's token timeline, 7-day usage, 30-day usage, recent sessions, detailed event records, and model pricing breakdowns.
 - Supports account filtering. You can configure multiple accounts by mapping account labels to different Codex session folders.
 - Links Today Timeline points with matching Today Events table rows on hover.
 - Draws hollow prompt/session rings on the Today Timeline and links them to Recent Sessions rows.
+- Adds cost columns to Today Events and Recent Sessions. Hover a cost value to see the calculation.
 - Includes commands for refreshing data, opening the latest session, showing details, and selecting a custom sessions folder.
 
 ## Installation
@@ -47,7 +53,18 @@ Click the status bar token usage item to open the detailed visual dashboard.
 
 After installation, Codex Token Monitor automatically watches your Codex sessions folder and shows token usage in the VS Code status bar.
 
-Click the status bar item to open the detailed dashboard. The dashboard visualizes today's timeline, recent events, recent sessions, and usage trends across the last 7 and 30 days.
+Click the status bar item to open the detailed dashboard. The dashboard visualizes today's timeline, recent events, recent sessions, model pricing tables, and usage trends across the last 7 and 30 days.
+
+Cost estimates are calculated from the parsed model name in each Codex session. Unknown models are shown without a price instead of being silently mapped to a fallback model.
+
+Built-in pricing currently includes:
+
+- `gpt-5.5`
+- `gpt-5-codex`
+- `gpt-5.1-codex`
+- `gpt-5.1-codex-max`
+- `gpt-5.2-codex`
+- `gpt-5.3-codex`
 
 ## Commands
 
@@ -94,3 +111,7 @@ npm.cmd run package
 ```
 
 The VSIX will be written to the `dist/` folder.
+
+## License
+
+This project is licensed under the [MIT License](./LICENSE).
