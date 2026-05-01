@@ -1,0 +1,84 @@
+{
+  "name": "codex-token-monitor",
+  "displayName": "Codex Token Monitor",
+  "description": "Realtime Codex token usage monitor for the VS Code status bar.",
+  "version": "0.2.3",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codexTokenMonitor.refresh",
+    "onCommand:codexTokenMonitor.openLatestSession",
+    "onCommand:codexTokenMonitor.chooseSessionsRoot",
+    "onCommand:codexTokenMonitor.showDetails"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexTokenMonitor.refresh",
+        "title": "Codex Token Monitor: Refresh"
+      },
+      {
+        "command": "codexTokenMonitor.openLatestSession",
+        "title": "Codex Token Monitor: Open Latest Session"
+      },
+      {
+        "command": "codexTokenMonitor.chooseSessionsRoot",
+        "title": "Codex Token Monitor: Choose Sessions Folder"
+      },
+      {
+        "command": "codexTokenMonitor.showDetails",
+        "title": "Codex Token Monitor: Show Details"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Token Monitor",
+      "properties": {
+        "codexTokenMonitor.sessionsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Codex sessions folder. Leave empty to use the default ~/.codex/sessions path."
+        },
+        "codexTokenMonitor.accounts": {
+          "type": "array",
+          "default": [],
+          "description": "Optional account list for comparing multiple Codex session folders.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "description": "Display name shown in the dashboard account selector."
+              },
+              "sessionsRoot": {
+                "type": "string",
+                "description": "Sessions folder for this account, for example C:\\Users\\PC\\.codex\\sessions."
+              }
+            },
+            "required": [
+              "label",
+              "sessionsRoot"
+            ]
+          }
+        },
+        "codexTokenMonitor.refreshIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 250,
+          "description": "Fallback polling interval in milliseconds. File watching is also used when available."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "node --check src/extension.js && node --check scripts/package-vsix.js",
+    "package": "node scripts/package-vsix.js"
+  }
+}

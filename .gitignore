@@ -1,0 +1,7 @@
+.vscode-test-extensions/
+.vscode-test-user-data/
+.vsix-build/
+node_modules/
+dist/
+*.vsix
+.DS_Store
